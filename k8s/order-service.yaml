@@ -1,0 +1,37 @@
+# k8s/order-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-api-pvx
+  labels: { app: order-api-pvx }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: order-api-pvx } }
+  template:
+    metadata: { labels: { app: order-api-pvx } }
+    spec:
+      containers:
+      - name: order
+        image: REPLACE_ME_ACR.azurecr.io/order_service:pvx-latest
+        imagePullPolicy: Always
+        ports: [ { containerPort: 8000 } ]
+        env:
+        - { name: POSTGRES_HOST, value: order-db-svc-pvx }
+        - { name: POSTGRES_DB,   valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: ORDERS_DB_NAME } } }
+        - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_USER } } }
+        - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_PASSWORD } } }
+        - { name: PRODUCT_SERVICE_URL,  valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: PRODUCT_SERVICE_URL } } }
+        - { name: CUSTOMER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: CUSTOMER_SERVICE_URL } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-api-pvx
+  labels: { app: order-api-pvx }
+spec:
+  selector: { app: order-api-pvx }
+  ports:
+    - protocol: TCP
+      port: 8002
+      targetPort: 8000
+  type: LoadBalancer

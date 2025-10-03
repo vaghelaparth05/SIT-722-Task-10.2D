@@ -1,0 +1,33 @@
+# k8s/order-db.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-db-pvx
+  labels: { app: order-db-pvx }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: order-db-pvx } }
+  template:
+    metadata: { labels: { app: order-db-pvx } }
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports: [ { containerPort: 5432 } ]
+        env:
+        - name: POSTGRES_DB
+          valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: ORDERS_DB_NAME } }
+        - name: POSTGRES_USER
+          valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_USER } }
+        - name: POSTGRES_PASSWORD
+          valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_PASSWORD } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-db-svc-pvx
+  labels: { app: order-db-pvx }
+spec:
+  selector: { app: order-db-pvx }
+  ports: [ { protocol: TCP, port: 5432, targetPort: 5432 } ]
+  type: ClusterIP

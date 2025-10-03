@@ -1,0 +1,31 @@
+# k8s/frontend.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-portal-pvx
+  labels: { app: web-portal-pvx }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: web-portal-pvx } }
+  template:
+    metadata: { labels: { app: web-portal-pvx } }
+    spec:
+      containers:
+      - name: nginx
+        image: REPLACE_ME_ACR.azurecr.io/frontend:pvx-latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-portal-pvx
+  labels: { app: web-portal-pvx }
+spec:
+  selector: { app: web-portal-pvx }
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: LoadBalancer

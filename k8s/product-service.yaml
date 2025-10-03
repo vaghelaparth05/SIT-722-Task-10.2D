@@ -1,0 +1,39 @@
+# k8s/product-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-api-pvx
+  labels: { app: product-api-pvx }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: product-api-pvx } }
+  template:
+    metadata: { labels: { app: product-api-pvx } }
+    spec:
+      containers:
+      - name: product
+        image: REPLACE_ME_ACR.azurecr.io/product_service:pvx-latest
+        imagePullPolicy: Always
+        ports: [ { containerPort: 8000 } ]
+        env:
+        - { name: POSTGRES_HOST, value: product-db-svc-pvx }
+        - { name: POSTGRES_DB,   valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: PRODUCTS_DB_NAME } } }
+        - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_USER } } }
+        - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_PASSWORD } } }
+        - { name: AZURE_STORAGE_ACCOUNT_NAME, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: AZURE_STORAGE_ACCOUNT_NAME } } }
+        - { name: AZURE_STORAGE_ACCOUNT_KEY,  valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: AZURE_STORAGE_ACCOUNT_KEY } } }
+        - { name: AZURE_STORAGE_CONTAINER_NAME,  valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: AZURE_STORAGE_CONTAINER_NAME } } }
+        - { name: AZURE_SAS_TOKEN_EXPIRY_HOURS, valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: AZURE_SAS_TOKEN_EXPIRY_HOURS } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-api-pvx
+  labels: { app: product-api-pvx }
+spec:
+  selector: { app: product-api-pvx }
+  ports:
+    - protocol: TCP
+      port: 8001       # external
+      targetPort: 8000 # pod
+  type: LoadBalancer

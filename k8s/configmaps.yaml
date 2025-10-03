@@ -1,0 +1,18 @@
+# k8s/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shopstack-config-pvx
+data:
+  # DB names
+  PRODUCTS_DB_NAME: products
+  ORDERS_DB_NAME: orders
+  CUSTOMERS_DB_NAME: customers
+
+  AZURE_STORAGE_CONTAINER_NAME: product-images
+  AZURE_SAS_TOKEN_EXPIRY_HOURS: "24"
+
+  # In-cluster service URLs (pods talk to port 8000 on peer services)
+  PRODUCT_SERVICE_URL:  http://product-api-pvx:8000
+  ORDER_SERVICE_URL:    http://order-api-pvx:8000
+  CUSTOMER_SERVICE_URL: http://customer-api-pvx:8000

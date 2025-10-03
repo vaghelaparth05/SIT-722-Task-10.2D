@@ -1,0 +1,111 @@
+# .github/workflows/backend-cd.yml
+name: Stage 2 - PVX Backend CD - Deploy to Ephemeral Staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed for repo dispatch
+
+    env:
+      NS: pvx-stg-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          cluster-name:  ${{ secrets.AKS_CLUSTER }}
+
+      - name: Attach ACR to AKS (idempotent)
+        run: |
+          az aks update \
+            --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AKS_CLUSTER }}" \
+            --attach-acr "${{ secrets.ACR_NAME }}"
+
+      - name: Create namespace
+        run: kubectl create namespace "$NS" || true
+
+      - name: Apply config + secrets
+        run: |
+          kubectl apply -n "$NS" -f k8s/configmaps.yaml
+          kubectl apply -n "$NS" -f k8s/secrets.yaml
+
+      - name: Apply databases
+        run: |
+          kubectl apply -n "$NS" -f k8s/product-db.yaml
+          kubectl apply -n "$NS" -f k8s/order-db.yaml
+          kubectl apply -n "$NS" -f k8s/customer-db.yaml
+
+      - name: Deploy backend APIs (LB: 8001/8002/8003)
+        run: |
+          kubectl apply -n "$NS" -f k8s/product-service.yaml
+          kubectl apply -n "$NS" -f k8s/order-service.yaml
+          kubectl apply -n "$NS" -f k8s/customer-service.yaml
+
+      - name: List resources (debug)
+        run: |
+          echo "--- Deployments ---"
+          kubectl get deploy -n "$NS" -o wide || true
+          echo "--- Services ---"
+          kubectl get svc -n "$NS" -o wide || true
+          echo "--- Pods ---"
+          kubectl get pods -n "$NS" -o wide || true
+
+      - name: Wait for rollouts
+        run: |
+          for d in product-api-pvx order-api-pvx customer-api-pvx; do
+            echo "Waiting for rollout of $d"
+            kubectl rollout status deploy/$d -n "$NS" --timeout=300s || exit 1
+          done
+
+      - name: Capture LoadBalancer IPs
+        run: |
+          PRODUCT_IP=""; ORDER_IP=""; CUSTOMER_IP=""
+          for i in $(seq 1 60); do
+            echo "Attempt $i/60 to get external IPs..."
+            PRODUCT_IP=$(kubectl get svc product-api-pvx   -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+            ORDER_IP=$(kubectl get svc   order-api-pvx     -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+            CUSTOMER_IP=$(kubectl get svc customer-api-pvx -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+            if [[ -n "$PRODUCT_IP" && -n "$ORDER_IP" && -n "$CUSTOMER_IP" ]]; then break; fi
+            sleep 5
+          done
+          if [[ -z "$PRODUCT_IP" || -z "$ORDER_IP" || -z "$CUSTOMER_IP" ]]; then
+            echo "::error:: One or more LoadBalancer IPs not assigned after timeout."
+            kubectl get svc -n "$NS" -o wide || true
+            exit 1
+          fi
+          echo "PRODUCT_IP=$PRODUCT_IP"   >> $GITHUB_ENV
+          echo "ORDER_IP=$ORDER_IP"       >> $GITHUB_ENV
+          echo "CUSTOMER_IP=$CUSTOMER_IP" >> $GITHUB_ENV
+          echo "::notice:: Product  = http://$PRODUCT_IP:8001"
+          echo "::notice:: Order    = http://$ORDER_IP:8002"
+          echo "::notice:: Customer = http://$CUSTOMER_IP:8003"
+
+      - name: Trigger Frontend CD (pvx_backend_ready)
+        if: ${{ success() }}
+        run: |
+          echo "Dispatching pvx_backend_ready with backend URLs..."
+          curl -sSL -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d "$(jq -n \
+              --arg pu "http://${{ env.PRODUCT_IP }}:8001" \
+              --arg ou "http://${{ env.ORDER_IP }}:8002" \
+              --arg cu "http://${{ env.CUSTOMER_IP }}:8003" \
+              '{event_type:"pvx_backend_ready", client_payload:{product_url:$pu, order_url:$ou, customer_url:$cu}}')"
+          echo "Dispatched."

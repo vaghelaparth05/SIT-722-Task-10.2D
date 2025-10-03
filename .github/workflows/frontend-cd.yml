@@ -1,0 +1,122 @@
+# .github/workflows/frontend_cd.yml
+name: Stage 3 - PVX Frontend CD - Deploy to Staging
+
+on:
+  repository_dispatch:
+    types: [pvx_backend_ready]
+  workflow_dispatch:
+    inputs:
+      aks_cluster_name:   { required: false, default: "" }
+      aks_resource_group: { required: false, default: "" }
+      product_url:        { required: false, default: "" }
+      order_url:          { required: false, default: "" }
+      customer_url:       { required: false, default: "" }
+
+jobs:
+  deploy_frontend:
+    runs-on: ubuntu-latest
+    env:
+      NS: pvx-web-${{ github.run_id }}
+
+      PRODUCT_SVC:  product-api-pvx
+      ORDER_SVC:    order-api-pvx
+      CUSTOMER_SVC: customer-api-pvx
+
+      PROD_PORT: "8001"
+      ORD_PORT:  "8002"
+      CUST_PORT: "8003"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ inputs.aks_resource_group || secrets.AKS_RESOURCE_GROUP }}
+          cluster-name:  ${{ inputs.aks_cluster_name   || secrets.AKS_CLUSTER }}
+
+      - name: Ensure namespace
+        run: kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create namespace "$NS"
+
+      - name: Resolve backend endpoints (payload > manual > discovery)
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          trim(){ printf "%s" "${1%/}"; }
+          P_IN="${{ github.event.client_payload.product_url || '' }}";  [ -z "$P_IN" ] && P_IN="${{ inputs.product_url || '' }}"
+          O_IN="${{ github.event.client_payload.order_url   || '' }}";  [ -z "$O_IN" ] && O_IN="${{ inputs.order_url   || '' }}"
+          C_IN="${{ github.event.client_payload.customer_url|| '' }}";  [ -z "$C_IN" ] && C_IN="${{ inputs.customer_url|| '' }}"
+          if [[ -n "${P_IN}${O_IN}${C_IN}" ]]; then
+            echo "PRODUCT_URL=$(trim "$P_IN")"   >> "$GITHUB_ENV"
+            echo "ORDER_URL=$(trim "$O_IN")"     >> "$GITHUB_ENV"
+            echo "CUSTOMER_URL=$(trim "$C_IN")"  >> "$GITHUB_ENV"
+            exit 0
+          fi
+          need_ns(){ kubectl get svc -A | awk -v n="$1" '$2==n{print $1; exit}'; }
+          get_ep(){ kubectl get svc "$2" -n "$1" -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'; }
+          P_NS=$(need_ns "${PRODUCT_SVC}") || { echo "::error::${PRODUCT_SVC} not found"; exit 1; }
+          O_NS=$(need_ns "${ORDER_SVC}")   || { echo "::error::${ORDER_SVC} not found"; exit 1; }
+          C_NS=$(need_ns "${CUSTOMER_SVC}")|| { echo "::error::${CUSTOMER_SVC} not found"; exit 1; }
+          for i in $(seq 1 120); do
+            P_EP=$(get_ep "$P_NS" "${PRODUCT_SVC}") || true
+            O_EP=$(get_ep "$O_NS" "${ORDER_SVC}")   || true
+            C_EP=$(get_ep "$C_NS" "${CUSTOMER_SVC}")|| true
+            [[ -n "$P_EP" && -n "$O_EP" && -n "$C_EP" ]] && break
+            echo "Waiting for backend LB endpoints... attempt $i"; sleep 5
+          done
+          [[ -n "$P_EP" && -n "$O_EP" && -n "$C_EP" ]] || { echo "::error::Timed out waiting for endpoints"; kubectl get svc -A -o wide || true; exit 1; }
+          echo "PRODUCT_URL=http://${P_EP}:${PROD_PORT}"   >> "$GITHUB_ENV"
+          echo "ORDER_URL=http://${O_EP}:${ORD_PORT}"      >> "$GITHUB_ENV"
+          echo "CUSTOMER_URL=http://${C_EP}:${CUST_PORT}"  >> "$GITHUB_ENV"
+
+      - name: Inject API URLs into frontend/main.js
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="frontend/main.js"
+          if [ ! -f "$TARGET" ]; then
+            FOUND=$(find . -type f -name 'main.js' -maxdepth 6 | head -n1 || true)
+            [ -n "$FOUND" ] && TARGET="$FOUND" || { echo "::error::frontend main.js not found"; exit 1; }
+          fi
+          sed -i 's|const PRODUCT_API_BASE_URL *= *.*|const PRODUCT_API_BASE_URL = "_PVX_PRODUCT_API_BASE_URL_";|' "$TARGET" || true
+          sed -i 's|const ORDER_API_BASE_URL *= *.*|const ORDER_API_BASE_URL = "_PVX_ORDER_API_BASE_URL_";|' "$TARGET" || true
+          sed -i 's|const CUSTOMER_API_BASE_URL *= *.*|const CUSTOMER_API_BASE_URL = "_PVX_CUSTOMER_API_BASE_URL_";|' "$TARGET" || true
+          sed -i "s|_PVX_PRODUCT_API_BASE_URL_|${PRODUCT_URL}|g"   "$TARGET" || true
+          sed -i "s|_PVX_ORDER_API_BASE_URL_|${ORDER_URL}|g"       "$TARGET" || true
+          sed -i "s|_PVX_CUSTOMER_API_BASE_URL_|${CUSTOMER_URL}|g" "$TARGET" || true
+          sed -n '1,60p' "$TARGET"
+
+      - name: ACR login
+        run: |
+          REG="${{ secrets.ACR_LOGIN_SERVER }}"
+          NAME="${REG##https://}"; NAME="${NAME%%/*}"; NAME="${NAME%%.azurecr.io}"
+          az acr login --name "$NAME"
+
+      - name: Build & push frontend image
+        run: |
+          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:pvx-latest ./frontend
+          docker tag  ${{ secrets.ACR_LOGIN_SERVER }}/frontend:pvx-latest ${{ secrets.ACR_LOGIN_SERVER }}/frontend:pvx-${{ github.sha }}
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:pvx-latest
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:pvx-${{ github.sha }}
+
+      - name: Deploy frontend
+        run: |
+          kubectl apply -n "$NS" -f k8s/frontend.yaml
+          kubectl rollout status deploy/web-portal-pvx -n "$NS" --timeout=300s
+          kubectl get deploy,svc,pod -n "$NS" -o wide || true
+
+      - name: Wait for frontend address
+        run: |
+          for i in $(seq 1 60); do
+            FADDR=$(kubectl get svc web-portal-pvx -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            [ -n "$FADDR" ] && break
+            echo "Waiting for frontend LB address... attempt $i"; sleep 5
+          done
+          [ -n "$FADDR" ] || { echo "::error::Frontend address not assigned"; exit 1; }
+          echo "::notice:: Frontend URL: http://$FADDR"

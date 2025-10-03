@@ -1,0 +1,35 @@
+# k8s/customer-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-api-pvx
+  labels: { app: customer-api-pvx }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: customer-api-pvx } }
+  template:
+    metadata: { labels: { app: customer-api-pvx } }
+    spec:
+      containers:
+      - name: customer
+        image: REPLACE_ME_ACR.azurecr.io/customer_service:pvx-latest
+        imagePullPolicy: Always
+        ports: [ { containerPort: 8000 } ]
+        env:
+        - { name: POSTGRES_HOST, value: customer-db-svc-pvx }
+        - { name: POSTGRES_DB,   valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: CUSTOMERS_DB_NAME } } }
+        - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_USER } } }
+        - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_PASSWORD } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-api-pvx
+  labels: { app: customer-api-pvx }
+spec:
+  selector: { app: customer-api-pvx }
+  ports:
+    - protocol: TCP
+      port: 8003
+      targetPort: 8000
+  type: LoadBalancer

@@ -1,0 +1,33 @@
+# k8s/product-db.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-db-pvx
+  labels: { app: product-db-pvx }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: product-db-pvx } }
+  template:
+    metadata: { labels: { app: product-db-pvx } }
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports: [ { containerPort: 5432 } ]
+        env:
+        - name: POSTGRES_DB
+          valueFrom: { configMapKeyRef: { name: shopstack-config-pvx, key: PRODUCTS_DB_NAME } }
+        - name: POSTGRES_USER
+          valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_USER } }
+        - name: POSTGRES_PASSWORD
+          valueFrom: { secretKeyRef: { name: shopstack-secrets-pvx, key: POSTGRES_PASSWORD } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-db-svc-pvx
+  labels: { app: product-db-pvx }
+spec:
+  selector: { app: product-db-pvx }
+  ports: [ { protocol: TCP, port: 5432, targetPort: 5432 } ]
+  type: ClusterIP
