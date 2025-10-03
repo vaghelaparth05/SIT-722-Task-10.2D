@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
       - name: customer
-        image: REPLACE_ME_ACR.azurecr.io/customer_service:pvx-latest
+        image: sit722pvacr.azurecr.io/customer_service:pvx-latest
         imagePullPolicy: Always
         ports: [ { containerPort: 8000 } ]
         env:

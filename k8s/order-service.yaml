@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
       - name: order
-        image: REPLACE_ME_ACR.azurecr.io/order_service:pvx-latest
+        image: sit722pvacr.azurecr.io/order_service:pvx-latest
         imagePullPolicy: Always
         ports: [ { containerPort: 8000 } ]
         env:

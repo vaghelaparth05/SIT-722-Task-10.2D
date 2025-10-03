@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: REPLACE_ME_ACR.azurecr.io/frontend:pvx-latest
+        image: sit722pvacr.azurecr.io.azurecr.io/frontend:pvx-latest
         imagePullPolicy: Always
         ports:
         - containerPort: 80
